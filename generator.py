@@ -5,8 +5,9 @@ from google import genai
 
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
-INPUT_FILE = "chunks.jsonl"
-OUTPUT_FILE = "dataset.jsonl"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+INPUT_FILE = os.path.join(BASE_DIR, "chunks.jsonl")
+OUTPUT_FILE = os.path.join(BASE_DIR, "dataset.jsonl")
 MODEL = "gemini-2.5-flash"
 
 def generate_example(chunk):
