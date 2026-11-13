@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dataset Generator</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f6f9;color:#192536;font:15px/1.6 system-ui,sans-serif}main{max-width:900px;margin:40px auto;padding:0 20px}h1,h2{line-height:1.2}h1{font-size:30px}h2{font-size:19px}p{color:#596779}section{background:white;border:1px solid #dce2eb;border-radius:12px;padding:24px;margin:20px 0}label{display:block;font-weight:600;margin:16px 0 6px}input,textarea,select,button{font:inherit}input,textarea,select{width:100%;padding:10px;border:1px solid #b9c4d2;border-radius:6px;background:white;color:inherit}textarea{resize:vertical}button,.download{display:inline-block;border:0;border-radius:6px;background:#2459cb;color:white;padding:11px 20px;text-decoration:none;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.row{display:grid;grid-template-columns:1fr 1fr;gap:20px}.hint{font-size:13px;color:#596779;margin:6px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f6f9;border:1px solid #dce2eb;border-radius:6px;padding:16px;max-height:500px;overflow:auto}progress{width:100%;accent-color:#2459cb}#status{white-space:pre-wrap}#schema{font-family:monospace}[hidden]{display:none!important}:focus-visible{outline:3px solid #8bb2ff;outline-offset:2px}@media(max-width:600px){.row{grid-template-columns:1fr;gap:0}section{padding:16px}main{margin:24px auto}}
+</style>
+</head>
+<body>
+<main>
+<h1>Dataset Generator</h1>
+<p>Upload raw text. Describe the dataset you need. Export structured JSONL with Gemini.</p>
+<form id="form">
+<section>
+<h2>1. Add your source</h2>
+<label for="file">Text file</label>
+<input id="file" type="file" accept=".txt,.md,text/plain,text/markdown">
+<label for="source">Raw text</label>
+<textarea id="source" rows="8" required maxlength="2000000" placeholder="Upload a UTF-8 file above or paste your source text here."></textarea>
+<p class="hint">Up to 2 million characters. A file replaces the text in this box.</p>
+</section>
+<section>
+<h2>2. Describe the result</h2>
+<label for="brief">What should this dataset contain?</label>
+<textarea id="brief" rows="4" required minlength="10" maxlength="10000" placeholder="Example: Create beginner question-answer examples from this manual. Use English, cover installation and troubleshooting, and keep answers under 80 words."></textarea>
+<div class="row">
+<div><label for="format">Record structure</label><select id="format"><option value="messages">Chat messages</option><option value="instruction">Instruction / input / output</option><option value="custom">Custom JSON schema</option></select></div>
+<div><label for="count">Target number of records</label><input id="count" type="number" value="20" min="1" max="1000" required></div>
+</div>
+<div id="custom" hidden>
+<label for="schema">JSON schema for one record</label>
+<textarea id="schema" rows="12" maxlength="20000">{
+  "type": "object",
+  "properties": {
+    "text": {"type": "string", "minLength": 1},
+    "label": {"type": "string", "enum": ["positive", "negative", "neutral"]}
+  },
+  "required": ["text", "label"],
+  "additionalProperties": false
+}</textarea>
+<p class="hint">Supports nested objects, arrays and typed fields. Gemini supports a subset of JSON Schema. References are not supported here.</p>
+</div>
+</section>
+<section>
+<h2>3. Connect Gemini</h2>
+<div class="row">
+<div><label for="key">Gemini API key</label><input id="key" type="password" autocomplete="off" placeholder="Or set GEMINI_API_KEY in your terminal"></div>
+<div><label for="model">Model ID</label><input id="model" required pattern="[a-zA-Z0-9._-]+" placeholder="Enter a Gemini model ID from AI Studio"></div>
+</div>
+<p class="hint">Your requirements, schema and source chunks are sent to Google. The app does not save your API key.</p>
+<button id="generate" type="submit">Generate dataset</button>
+</section>
+</form>
+<section id="result" hidden>
+<h2>Generation results</h2>
+<p id="status" role="status" aria-live="polite"></p>
+<progress id="progress" value="0" max="20"></progress>
+<a id="download" class="download" hidden>Download JSONL</a>
+<p class="hint">Preview shows the first 10 accepted records. Review factual accuracy before training.</p>
+<pre id="preview"></pre>
+</section>
+<p class="hint">Raw text, cleaned text, settings, generation report and dataset are saved in a separate folder for each run under data/.</p>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+$("format").onchange = () => { $("custom").hidden = $("format").value !== "custom"; };
+$("file").onchange = async event => {
+    const file = event.target.files[0];
+    if (!file) return;
+    try {
+        if (file.size > 8000000) throw Error("File is too large. Use up to 2 million characters.");
+        const text = await file.text();
+        if (text.length > 2000000) throw Error("Use up to 2 million characters.");
+        $("source").value = text;
+    } catch (error) { alert(error.message); }
+};
+async function request(url, options) {
+    const response = await fetch(url, options);
+    const body = await response.json();
+    if (!response.ok) {
+        const detail = Array.isArray(body.detail) ? body.detail.map(e => e.loc.at(-1) + ": " + e.msg).join("; ") : body.detail;
+        throw Error(detail || "Request failed.");
+    }
+    return body;
+}
+$("form").onsubmit = async event => {
+    event.preventDefault();
+    $("generate").disabled = true;
+    $("result").hidden = false;
+    $("download").hidden = true;
+    $("preview").textContent = "";
+    $("progress").value = 0;
+    $("progress").max = Number($("count").value);
+    $("status").textContent = "Starting generation...";
+    try {
+        if ($("format").value === "custom") JSON.parse($("schema").value);
+        const payload = {
+            source: $("source").value, brief: $("brief").value, api_key: $("key").value,
+            model: $("model").value, count: Number($("count").value),
+            format: $("format").value, schema_text: $("schema").value
+        };
+        const {job_id} = await request("/api/generate", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+        $("key").value = "";
+        while (true) {
+            const job = await request("/api/jobs/" + job_id);
+            $("status").textContent = job.status + ": " + job.accepted + " / " + job.requested + " records; " + job.rejected + " rejected; " + job.attempts + " API attempts." + (job.error ? "\n" + job.error : "");
+            $("progress").value = job.accepted;
+            $("preview").textContent = job.preview.map(record => JSON.stringify(record, null, 2)).join("\n\n");
+            if (job.status !== "running") {
+                $("download").hidden = !job.accepted;
+                $("download").href = "/api/jobs/" + job_id + "/download";
+                break;
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+    } catch (error) {
+        $("status").textContent = error.message + " If a job already started, its files remain under data/.";
+    } finally {
+        $("generate").disabled = false;
+    }
+};
+</script>
+</body>
+</html>
+
